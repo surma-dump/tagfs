@@ -15,12 +15,12 @@ DB *db ;
 struct filekey {
 	short int name_length ;
 	char *filename ;
-}
+};
 
 struct file {
 	struct stat stats ;
 	char *data ;
-}
+};
 
 static inline char *tagfs_get_db_file() {
 	return (char *) fuse_get_context()->private_data ;
