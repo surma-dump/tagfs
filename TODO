@@ -1,3 +1,5 @@
 - Allow multiple keys
 - Add other tables
 - some cleaner design
+- add init-flag
+- and do param-handling on your own
