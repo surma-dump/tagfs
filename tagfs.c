@@ -1,13 +1,12 @@
 #define FUSE_USE_VERSION 26
 #include <stdlib.h> // getuid() getgid()
 #include <sys/types.h>
-
+#include <signal.h> // getpid(), kill()
 #include <fuse.h> // FUSE... duh
 #include <db.h> // BerkeleyDB
 #include <errno.h> // Return values
 #include <time.h> // time() 
 #include <string.h> // memset(), basename(), memcpy() 
-#define static ;
 
 #define FUSE_OP(a) .a = &tagfs_##a 
 #define KEYSIZE(a) sizeof(struct filekey) + a->name_length
@@ -30,14 +29,21 @@ static inline char *tagfs_get_db_file() {
 }
 
 static void *tagfs_init(struct fuse_conn_info *conn) {
+	int error ;
 	db_create(&db_files, NULL, 0) ;
 	db_create(&db_f2t,   NULL, 0) ;
 	db_create(&db_tags,  NULL, 0) ;
 	db_create(&db_t2f,   NULL, 0) ;
-	db_files->open(db_files, NULL, tagfs_get_db_file(), "files", DB_BTREE, DB_CREATE, 0700) ;
-	db_f2t->open  (db_f2t,   NULL, tagfs_get_db_file(), "f2t",   DB_BTREE, DB_CREATE, 0700) ;
-	db_tags->open (db_tags,  NULL, tagfs_get_db_file(), "tags",  DB_BTREE, DB_CREATE, 0700) ;
-	db_t2f->open  (db_t2f,   NULL, tagfs_get_db_file(), "t2f",   DB_BTREE, DB_CREATE, 0700) ;
+	error  = db_files->open(db_files, NULL, tagfs_get_db_file(), "files", DB_BTREE, 0, 0700) ;
+	error |= db_f2t->open  (db_f2t,   NULL, tagfs_get_db_file(), "f2t",   DB_BTREE, 0, 0700) ;
+	error |= db_tags->open (db_tags,  NULL, tagfs_get_db_file(), "tags",  DB_BTREE, 0, 0700) ;
+	error |= db_t2f->open  (db_t2f,   NULL, tagfs_get_db_file(), "t2f",   DB_BTREE, 0, 0700) ;
+
+	if(error != 0) {
+		fprintf(stderr, "tagfs: init: Could not open databases\n") ;
+		kill(getpid(), SIGINT) ;
+	}
+
 }
 
 static void tagfs_destroy() {
@@ -49,8 +55,8 @@ static void tagfs_destroy() {
 
 struct filekey *generate_filekey(char *path) {
 	int len = strlen(path) ;
-	struct filekey *p = (struct filekey *) malloc (sizeof(struct filekey)) 
-		+ len + 1 ;
+	struct filekey *p = (struct filekey *) malloc (sizeof(struct filekey) 
+		+ len + 1) ;
 	p->name_length = len ;
 	p->filename = (char*)p + 1 ;
 	strncpy(p->filename, path, len) ;
