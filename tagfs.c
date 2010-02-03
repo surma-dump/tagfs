@@ -6,11 +6,14 @@
 #include <db.h> // BerkeleyDB
 #include <errno.h> // Return values
 #include <time.h> // time() 
-#include <string.h> // memset(), basename()
+#include <string.h> // memset(), basename(), memcpy() 
+#define static ;
 
 #define FUSE_OP(a) .a = &tagfs_##a 
+#define KEYSIZE(a) sizeof(struct filekey) + a->name_length
 
-DB *db ;
+
+DB *db_files, *db_f2t, *db_tags, *db_t2f ;
 
 struct filekey {
 	short int name_length ;
@@ -27,86 +30,102 @@ static inline char *tagfs_get_db_file() {
 }
 
 static void *tagfs_init(struct fuse_conn_info *conn) {
-	db_create(&db, NULL, 0) ;
-	db->open(db, NULL, tagfs_get_db_file(), "files", DB_BTREE, DB_CREATE, 0700) ;
+	db_create(&db_files, NULL, 0) ;
+	db_create(&db_f2t,   NULL, 0) ;
+	db_create(&db_tags,  NULL, 0) ;
+	db_create(&db_t2f,   NULL, 0) ;
+	db_files->open(db_files, NULL, tagfs_get_db_file(), "files", DB_BTREE, DB_CREATE, 0700) ;
+	db_f2t->open  (db_f2t,   NULL, tagfs_get_db_file(), "f2t",   DB_BTREE, DB_CREATE, 0700) ;
+	db_tags->open (db_tags,  NULL, tagfs_get_db_file(), "tags",  DB_BTREE, DB_CREATE, 0700) ;
+	db_t2f->open  (db_t2f,   NULL, tagfs_get_db_file(), "t2f",   DB_BTREE, DB_CREATE, 0700) ;
 }
 
 static void tagfs_destroy() {
-	db->close(db, 0) ;
+	db_files->close(db_files, 0) ;
+	db_f2t->close  (db_f2t,   0) ;
+	db_tags->close (db_tags,  0) ;
+	db_t2f->close  (db_t2f,   0) ;
 }
 
+struct filekey *generate_filekey(char *path) {
+	int len = strlen(path) ;
+	struct filekey *p = (struct filekey *) malloc (sizeof(struct filekey)) 
+		+ len + 1 ;
+	p->name_length = len ;
+	p->filename = (char*)p + 1 ;
+	strncpy(p->filename, path, len) ;
+	return p ;
+}
+
+
 static int tagfs_getattr(const char *path, struct stat *stbuf) {
-	char fname[256] ;
-	DBT key, value ;
+	DBT db_key, db_value ;
+	struct filekey *f_key ;
+	struct file *f ;
+		
+	memset(&db_key, 0, sizeof(DBT)) ;
+	memset(&db_value, 0, sizeof(DBT)) ;
 
+	f_key = generate_filekey((char *)basename(path)) ;	
+	db_key.data = f_key ;
+	db_key.size = KEYSIZE(f_key) ;
 
-
-	stbuf->st_uid = getuid() ;
-	stbuf->st_gid = getgid() ;
-	stbuf->st_blksize = 512 ;
-	stbuf->st_blocks = 0 ;
-	stbuf->st_nlink = 1 ;
-	stbuf->st_ino = 1 ;
-	stbuf->st_size = 0 ;
-
-	if(strcmp(path,"/") == 0) { 
-		stbuf->st_mode = S_IFDIR | 0777 ;
-		return 0 ;
-	}
-
-	memset(&key, 0, sizeof(DBT)) ;
-	memset(&value, 0, sizeof(DBT)) ;
-	memset(fname, 0, 256) ;
-	strncpy(fname, (char *)basename(path), 256) ;
-
-	key.data = fname ;
-	key.size = 256 ;
-
-	if(db->get(db, NULL, &key, &value, 0) != 0)
+	if(db_files->get(db_files, NULL, &db_key, &db_value, 0) != 0)
 		return -ENOENT ;
+	free(f_key) ;
+	memcpy(stbuf, &((struct file*)(db_value.data))->stats, sizeof(struct stat)) ;
 
-	stbuf->st_mode = S_IFREG | 0777 ;
-	stbuf->st_mtime = *(int*)value.data ;
 	return 0;
 }
 
 static int tagfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 			 off_t offset, struct fuse_file_info *fi) {
-	DBC *cp ;
-	DBT key, value ;
+	DBC *db_cp ;
+	DBT db_key, db_value ;
 
-	db->cursor(db, NULL, &cp, 0) ;
+	db_files->cursor(db_files, NULL, &db_cp, 0) ;
 
-	memset(&key, 0, sizeof(DBT)) ;
-	memset(&value, 0, sizeof(DBT)) ;
+	memset(&db_key, 0, sizeof(DBT)) ;
+	memset(&db_value, 0, sizeof(DBT)) ;
 
 	filler(buf, ".", NULL, 0) ;
 	filler(buf, "..", NULL, 0) ;
 	
-	while(cp->get(cp, &key, &value, DB_NEXT) == 0) 
-		filler(buf, (char *) (key.data), NULL, 0) ;
-	cp->close(cp) ;
+	while(db_cp->get(db_cp, &db_key, &db_value, DB_NEXT) == 0) 
+		filler(buf, ((struct filekey *)(db_key.data))->filename, NULL, 0) ;
+	db_cp->close(db_cp) ;
 	return 0 ;
 }
 
 static int tagfs_mknod(const char *path, mode_t mode, dev_t dev) {
-	char fname[256] ;
-	int t = (int) time(NULL) ;
-	DBT key, value ;
+	DBT db_key, db_value ;
+	struct filekey *f_key ;
+	struct file f ;
 
-	memset(&key, 0, sizeof(DBT)) ;
-	memset(&value, 0, sizeof(DBT)) ;
-	memset(fname, 0, 256) ;
+	memset(&db_key, 0, sizeof(DBT)) ;
+	memset(&db_value, 0, sizeof(DBT)) ;
+	memset(&f, 0, sizeof(struct file)) ;
 
-	strncpy(fname, (char *)basename(path), 256) ;
-	fprintf(stderr, "\n===> %s\n", (char *)basename(path)) ;
-	key.data = fname ;
-	key.size = 256 ;
+	f_key = generate_filekey((char *)basename(path)) ;
+	
+	db_key.data = f_key ;
+	db_key.size = KEYSIZE(f_key) ;
 
-	value.data = &t ;
-	value.size = sizeof(t) ;
+	db_value.data = &f ;
+	db_value.size = sizeof(struct file) ;
 
-	db->put(db, NULL, &key, &value, 0) ;
+	f.stats.st_ino = time(NULL) ;
+	f.stats.st_mode = mode ;
+	f.stats.st_nlink = 1 ;
+	f.stats.st_uid = getuid() ;
+	f.stats.st_gid = getgid() ;
+	f.stats.st_size = 0 ;
+	f.stats.st_atime = f.stats.st_ino ;
+	f.stats.st_ctime = f.stats.st_ino ;
+	f.stats.st_mtime = f.stats.st_ino ;
+
+	db_files->put(db_files, NULL, &db_key, &db_value, 0) ;
+	free(f_key) ;
 	return 0 ;
 }
 
