@@ -1,12 +1,12 @@
 NAME=tagfs
-CFLAGS=`pkg-config --cflags --libs fuse` -I/home/surma/build/tree/include -L/home/surma/build/tree/lib -ldb -ggdb
+BERKDB_INCLUDE=/home/surma/build/tree/include
+BERKDB_LIB=/home/surma/build/tree/lib
+CFLAGS=-I$(BERKDB_INCLUDE) -L$(BERKDB_LIB) -Wl,-Bstatic -ldb -Wl,-Bdynamic `pkg-config --cflags --libs fuse` -ggdb
 all:
 	gcc *.c -o $(NAME) $(CFLAGS)
 run:
 	-mkdir ./mount
-	-./$(NAME) db ./mount 
-	-/bin/bash
-	-fusermount -u mount
+	-./$(NAME) -f -o init -b ./db ./mount 
 	-rmdir mount
 
 debug:
