@@ -1,5 +1,4 @@
 - Allow multiple keys
-- Add other tables
+- Force creation of tables even if empty
 - some cleaner design
-- add init-flag
-- and do param-handling on your own
+- - Abstraction layer fuse <-> filedb <-> berkdb
